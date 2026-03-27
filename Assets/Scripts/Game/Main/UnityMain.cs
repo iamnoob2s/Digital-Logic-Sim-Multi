@@ -77,6 +77,7 @@ namespace DLS.Game
 			multiGO.AddComponent<DLS.Multiplayer.CommandDispatcher>();
 			multiGO.AddComponent<DLS.Multiplayer.SnapshotManager>();
 			multiGO.AddComponent<DLS.Multiplayer.StableIdRegistry>();
+			multiGO.AddComponent<DLS.Multiplayer.PlayerCursorManager>();
 			DontDestroyOnLoad(multiGO);
 
 			if (openInMainMenu || !Application.isEditor) Main.LoadMainMenu();

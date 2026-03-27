@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Text;
+using DLS.Multiplayer;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -51,13 +52,19 @@ namespace DLS.Multiplayer.UI
 			sb.Append(" | Players: ");
 
 			List<PlayerInfo> players = session.Players;
+			int maxPlayers = PlayerCursorManager.MaxPlayers;
 			for (int i = 0; i < players.Count; i++)
 			{
 				if (i > 0) sb.Append(", ");
 				sb.Append(players[i].Name);
 			}
+			sb.Append(" (");
+			sb.Append(players.Count);
+			sb.Append('/');
+			sb.Append(maxPlayers);
+			sb.Append(')');
 
-			// Average ping (host shows per-client ping, client shows self ping)
+			// Average ping
 			int avgPing = ComputeAveragePing();
 			if (avgPing >= 0)
 			{

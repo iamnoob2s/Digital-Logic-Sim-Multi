@@ -16,6 +16,17 @@ namespace DLS.Multiplayer
 	{
 		public static NetworkManager Instance { get; private set; }
 
+		/// <summary>
+		/// Maximum number of simultaneously connected clients (excluding the host).
+		/// Range: 1–15 clients, giving 2–16 total players including the host.
+		/// Default 7 = 8 players total.
+		/// </summary>
+		[SerializeField, Range(1, 15)]
+		int maxClients = 7;
+
+		/// <summary>Static accessor used by <see cref="PlayerCursorManager"/> and other subsystems.</summary>
+		public static int MaxClients => Instance != null ? Instance.maxClients : 7;
+
 		// ---- Events ----
 		public event Action<string>      OnConnectionFailed;
 		public event Action              OnDisconnected;
@@ -37,13 +48,22 @@ namespace DLS.Multiplayer
 		TcpClient _clientSocket;
 		Thread _clientReadThread;
 		NetworkStream _clientStream;
+
+		// Shared receive buffers — one per connection role (accessed only from their respective read thread)
 		byte[] _clientRecvBuffer = new byte[65536];
 		int _clientRecvOffset;
 
-		// ---- Shared ----
+		// ---- Queues ----
+		// Regular game commands and session messages (drained on main thread, max 50/frame)
 		readonly ConcurrentQueue<NetMessage> _incomingQueue = new();
-		// For host: incoming queue carries sender id via a wrapper
+		// Host path: carries sender id alongside the message
 		readonly ConcurrentQueue<(int senderId, NetMessage msg)> _hostIncomingQueue = new();
+		// MouseMove messages are stored separately so they never get stale in a backed-up queue
+		readonly ConcurrentQueue<(int senderId, NetMessage msg)> _mouseMoveQueue = new();
+
+		// Pre-allocated ping/pong frames (written once, never modified)
+		static readonly byte[] _pingFrame = NetSerializer.WriteMessage(MessageType.Ping, Array.Empty<byte>());
+		static readonly byte[] _pongFrame = NetSerializer.WriteMessage(MessageType.Pong, Array.Empty<byte>());
 
 		// ---- Ping tracking ----
 		const float PingInterval = 5f;
@@ -144,15 +164,11 @@ namespace DLS.Multiplayer
 			if (!_isRunning && _clientSocket == null) return;
 			_isRunning = false;
 
-			try
+			if (_clientStream != null)
 			{
-				if (_clientStream != null)
-				{
-					byte[] bye = NetSerializer.WriteMessage(MessageType.Disconnect, Array.Empty<byte>());
-					try { _clientStream.Write(bye, 0, bye.Length); } catch { /* ignored */ }
-				}
+				byte[] bye = NetSerializer.WriteMessage(MessageType.Disconnect, Array.Empty<byte>());
+				try { _clientStream.Write(bye, 0, bye.Length); } catch { /* ignored */ }
 			}
-			catch { /* ignored */ }
 
 			try { _clientSocket?.Close(); } catch { /* ignored */ }
 			_clientSocket = null;
@@ -175,11 +191,7 @@ namespace DLS.Multiplayer
 		public void SendToAll(NetMessage msg)
 		{
 			byte[] data = NetSerializer.WriteMessage(msg.Type, msg.Payload);
-			lock (_clientsLock)
-			{
-				foreach (NetworkClient c in _clients)
-					if (c.IsAuthenticated) c.Send(data);
-			}
+			BroadcastRaw(data);
 		}
 
 		public void SendToAllExcept(int playerId, NetMessage msg)
@@ -190,6 +202,24 @@ namespace DLS.Multiplayer
 				foreach (NetworkClient c in _clients)
 					if (c.IsAuthenticated && c.PlayerId != playerId) c.Send(data);
 			}
+		}
+
+		/// <summary>Broadcasts a pre-framed byte array to all authenticated clients. Zero allocations on the hot path.</summary>
+		public void BroadcastRaw(byte[] framedData)
+		{
+			lock (_clientsLock)
+			{
+				foreach (NetworkClient c in _clients)
+					if (c.IsAuthenticated) c.Send(framedData);
+			}
+		}
+
+		/// <summary>Sends a pre-framed byte array directly to the host stream. Zero allocations on the hot path.</summary>
+		public void SendRawToHost(byte[] framedData)
+		{
+			if (_clientStream == null) return;
+			try { _clientStream.Write(framedData, 0, framedData.Length); }
+			catch (Exception e) { Debug.LogError($"[Net] SendRawToHost error: {e.Message}"); }
 		}
 
 		/// <summary>Sends a command: if host, broadcast to all clients; if client, send to host.</summary>
@@ -204,9 +234,34 @@ namespace DLS.Multiplayer
 
 		void Update()
 		{
+			// Mouse-move messages are drained first (latest position per sender) to keep cursors snappy
+			DrainMouseMoveQueue();
 			DrainHostQueue();
 			DrainClientQueue();
 			HandlePings();
+		}
+
+		/// <summary>
+		/// Drain mouse-move messages, keeping only the most recent position per player.
+		/// This prevents cursor updates from backing up in the queue when the frame rate is low.
+		/// </summary>
+		void DrainMouseMoveQueue()
+		{
+			// Collect latest positions keyed by sender (discards stale entries)
+			while (_mouseMoveQueue.TryDequeue(out (int senderId, NetMessage msg) item))
+			{
+				if (item.msg.Payload.Length >= MouseMovePayload.SerializedSize)
+				{
+					MouseMovePayload p = MouseMovePayload.Deserialize(item.msg.Payload);
+					PlayerCursorManager.Instance?.OnRemoteMouseMove(p.PlayerId, p.WorldPosition);
+
+					// Host relays mouse-move to all other clients with zero extra allocations
+					if (NetworkSession.Instance != null && NetworkSession.Instance.IsHost)
+					{
+						SendToAllExcept(item.senderId, item.msg);
+					}
+				}
+			}
 		}
 
 		void DrainHostQueue()
@@ -248,17 +303,6 @@ namespace DLS.Multiplayer
 					OnPlayerLeft?.Invoke(p.PlayerId);
 					break;
 				}
-				case MessageType.Pong:
-				{
-					// Record RTT using local time — updated via UpdateClientPing
-					break;
-				}
-				case MessageType.Ping:
-				{
-					NetMessage pong = new(MessageType.Pong, Array.Empty<byte>());
-					SendToHost(pong);
-					break;
-				}
 				case MessageType.Disconnect:
 				{
 					Disconnect();
@@ -268,8 +312,8 @@ namespace DLS.Multiplayer
 				{
 					SnapshotManager.Instance?.ApplySnapshot(msg.Payload);
 					// After snapshot applied, signal ready
-					NetMessage ready = new(MessageType.SnapshotReady, Array.Empty<byte>());
-					SendToHost(ready);
+					byte[] ready = NetSerializer.WriteMessage(MessageType.SnapshotReady, Array.Empty<byte>());
+					SendRawToHost(ready);
 					break;
 				}
 				default:
@@ -288,7 +332,6 @@ namespace DLS.Multiplayer
 
 			if (NetworkSession.Instance.IsHost)
 			{
-				byte[] ping = NetSerializer.WriteMessage(MessageType.Ping, Array.Empty<byte>());
 				List<NetworkClient> toRemove = null;
 
 				lock (_clientsLock)
@@ -304,8 +347,9 @@ namespace DLS.Multiplayer
 							continue;
 						}
 
-						c.LastPingTime = Time.time;
-						c.Send(ping);
+						c.LastPingTime  = Time.time;
+						c.LastPingTick  = Environment.TickCount64;
+						c.Send(_pingFrame);
 					}
 
 					if (toRemove != null)
@@ -321,8 +365,7 @@ namespace DLS.Multiplayer
 			}
 			else if (_clientStream != null)
 			{
-				byte[] ping = NetSerializer.WriteMessage(MessageType.Ping, Array.Empty<byte>());
-				try { _clientStream.Write(ping, 0, ping.Length); } catch { /* ignored */ }
+				try { _clientStream.Write(_pingFrame, 0, _pingFrame.Length); } catch { /* ignored */ }
 			}
 		}
 
@@ -345,7 +388,7 @@ namespace DLS.Multiplayer
 					TcpClient tcp = _listener.AcceptTcpClient();
 					lock (_clientsLock)
 					{
-						if (_clients.Count >= 8)
+						if (_clients.Count >= maxClients)
 						{
 							tcp.Close();
 							continue;
@@ -455,7 +498,7 @@ namespace DLS.Multiplayer
 				client.Send(snapMsg);
 
 				// Begin reading
-				client.StartReading(_hostIncomingQueue);
+				client.StartReading(_hostIncomingQueue, _mouseMoveQueue);
 			}
 			catch (Exception e)
 			{
@@ -579,7 +622,16 @@ namespace DLS.Multiplayer
 
 					while (NetSerializer.TryReadMessage(buffer, offset, out NetMessage msg, out int consumed))
 					{
-						_incomingQueue.Enqueue(msg);
+						// Route mouse-move messages to their dedicated queue
+						if (msg.Type == MessageType.MouseMove)
+							_mouseMoveQueue.Enqueue((0, msg));
+						else if (msg.Type == MessageType.Ping)
+							try { _clientStream.Write(_pongFrame, 0, _pongFrame.Length); } catch { /* ignored */ }
+						else if (msg.Type == MessageType.Pong)
+							{ /* RTT tracking done by host-side NetworkClient */ }
+						else
+							_incomingQueue.Enqueue(msg);
+
 						offset -= consumed;
 						if (offset > 0) Buffer.BlockCopy(buffer, consumed, buffer, 0, offset);
 					}

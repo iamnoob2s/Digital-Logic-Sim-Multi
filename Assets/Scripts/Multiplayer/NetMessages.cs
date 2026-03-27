@@ -25,6 +25,7 @@ namespace DLS.Multiplayer
 		PlayerJoined       = 0x32,
 		PlayerLeft         = 0x33,
 		Disconnect         = 0x34,
+		MouseMove          = 0x40,
 	}
 
 	public class NetMessage
@@ -402,6 +403,49 @@ namespace DLS.Multiplayer
 			using MemoryStream ms = new(data);
 			using BinaryReader r = new(ms);
 			return new PlayerLeftPayload { PlayerId = r.ReadInt32() };
+		}
+	}
+
+	/// <summary>
+	/// Sent frequently (up to <see cref="PlayerCursorManager.SendHz"/> times per second) to share
+	/// the local player's world-space mouse position with all other peers.
+	/// Payload is intentionally tiny: 4-byte playerId + 8-byte Vector2 = 12 bytes.
+	/// </summary>
+	public struct MouseMovePayload
+	{
+		public int     PlayerId;
+		public Vector2 WorldPosition;
+
+		// Pre-computed payload size: int(4) + float(4) + float(4) = 12 bytes
+		public const int SerializedSize = 12;
+
+		/// <summary>Serializes directly into a caller-supplied buffer starting at <paramref name="offset"/> to avoid allocations.</summary>
+		public void SerializeInto(byte[] buf, int offset)
+		{
+			int pid = PlayerId;
+			buf[offset + 0] = (byte)(pid);
+			buf[offset + 1] = (byte)(pid >> 8);
+			buf[offset + 2] = (byte)(pid >> 16);
+			buf[offset + 3] = (byte)(pid >> 24);
+			byte[] xb = BitConverter.GetBytes(WorldPosition.x);
+			byte[] yb = BitConverter.GetBytes(WorldPosition.y);
+			Buffer.BlockCopy(xb, 0, buf, offset + 4, 4);
+			Buffer.BlockCopy(yb, 0, buf, offset + 8, 4);
+		}
+
+		public byte[] Serialize()
+		{
+			byte[] buf = new byte[SerializedSize];
+			SerializeInto(buf, 0);
+			return buf;
+		}
+
+		public static MouseMovePayload Deserialize(byte[] data)
+		{
+			int playerId = BitConverter.ToInt32(data, 0);
+			float x      = BitConverter.ToSingle(data, 4);
+			float y      = BitConverter.ToSingle(data, 8);
+			return new MouseMovePayload { PlayerId = playerId, WorldPosition = new Vector2(x, y) };
 		}
 	}
 }

@@ -24,7 +24,7 @@ namespace DLS.Multiplayer
 		{
 			byte[] key     = System.Text.Encoding.UTF8.GetBytes(password ?? string.Empty);
 			byte[] message = new byte[nonceServer.Length + nonceClient.Length];
-			Buffer.BlockCopy(nonceServer, 0, message, 0,                message.Length - nonceClient.Length);
+			Buffer.BlockCopy(nonceServer, 0, message, 0,                nonceServer.Length);
 			Buffer.BlockCopy(nonceClient, 0, message, nonceServer.Length, nonceClient.Length);
 
 			using HMACSHA256 hmac = new(key);
