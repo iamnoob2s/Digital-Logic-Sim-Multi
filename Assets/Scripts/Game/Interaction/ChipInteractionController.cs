@@ -3,6 +3,7 @@ using System.Linq;
 using DLS.Description;
 using DLS.Graphics;
 using DLS.SaveSystem;
+using Multiplayer = DLS.Multiplayer;
 using Seb.Helpers;
 using UnityEngine;
 
@@ -125,6 +126,9 @@ namespace DLS.Game
 			List<IMoveable> elementsToDelete = elements.Concat(GetNonIncludedLinkedBusElements(elements)).ToList();
 			ActiveDevChip.UndoController.RecordDeleteElements(elementsToDelete);
 
+			// Multiplayer: if we are applying a remote command, skip re-broadcasting
+			bool _isLocalAction = !Multiplayer.CommandDispatcher.IsApplyingRemote;
+
 			foreach (IMoveable element in elementsToDelete)
 			{
 				if (element is SubChipInstance subChip) ActiveDevChip.DeleteSubChip(subChip);
@@ -132,6 +136,11 @@ namespace DLS.Game
 			}
 
 			if (clearSelection) SelectedElements.Clear();
+
+			if (_isLocalAction && Multiplayer.NetworkSession.Instance != null && Multiplayer.NetworkSession.Instance.IsInSession)
+			{
+				// TODO: hook networking here — broadcast DeleteChip commands for each deleted subChip
+			}
 		}
 
 		void DeleteSelected()
@@ -172,14 +181,29 @@ namespace DLS.Game
 		{
 			if (HasControl)
 			{
+				// Multiplayer: if we are applying a remote command, skip re-broadcasting
+				bool _isLocalAction = !Multiplayer.CommandDispatcher.IsApplyingRemote;
 				ActiveDevChip.UndoController.RecordDeleteWire(wire);
 				ActiveDevChip.DeleteWire(wire);
+				if (_isLocalAction && Multiplayer.NetworkSession.Instance != null && Multiplayer.NetworkSession.Instance.IsInSession)
+				{
+					// TODO: hook networking here — broadcast DeleteWire command for wire.NetworkId
+				}
 			}
 		}
 
 		public void ToggleDevPinState(DevPinInstance devPin, int bitIndex)
 		{
-			if (HasControl) devPin.ToggleState(bitIndex);
+			if (HasControl)
+			{
+				devPin.ToggleState(bitIndex);
+				// Multiplayer: if we are applying a remote command, skip re-broadcasting
+				bool _isLocalAction = !Multiplayer.CommandDispatcher.IsApplyingRemote;
+				if (_isLocalAction && Multiplayer.NetworkSession.Instance != null && Multiplayer.NetworkSession.Instance.IsInSession)
+				{
+					// TODO: hook networking here — broadcast SetPinState command for devPin
+				}
+			}
 		}
 
 		void HandleKeyboardInput()
@@ -577,6 +601,13 @@ namespace DLS.Game
 			{
 				wire.ApplyMoveOffset();
 			}
+
+			// Multiplayer: if we are applying a remote command, skip re-broadcasting
+			bool _isLocalAction = !Multiplayer.CommandDispatcher.IsApplyingRemote;
+			if (_isLocalAction && hasMoved && Multiplayer.NetworkSession.Instance != null && Multiplayer.NetworkSession.Instance.IsInSession)
+			{
+				// TODO: hook networking here — broadcast MoveChip commands for each moved element
+			}
 		}
 
 		void FinishPlacingNewElements()
@@ -589,6 +620,9 @@ namespace DLS.Game
 					return;
 				}
 			}
+
+			// Multiplayer: if we are applying a remote command, skip re-broadcasting
+			bool _isLocalAction = !Multiplayer.CommandDispatcher.IsApplyingRemote;
 
 			List<IMoveable> newlyPlacedElements = new(SelectedElements);
 
@@ -612,6 +646,10 @@ namespace DLS.Game
 			DuplicatedWires.Clear();
 			OnFinishedPlacingItems();
 
+			if (_isLocalAction && Multiplayer.NetworkSession.Instance != null && Multiplayer.NetworkSession.Instance.IsInSession)
+			{
+				// TODO: hook networking here — broadcast PlaceChip commands for each newly placed subChip
+			}
 
 			if (KeyboardShortcuts.MultiModeHeld)
 			{
@@ -841,6 +879,13 @@ namespace DLS.Game
 				WireToPlace.FinishPlacingWire(info);
 				ActiveDevChip.AddWire(WireToPlace, false);
 				ActiveDevChip.UndoController.RecordAddWire(WireToPlace);
+
+				// Multiplayer: if we are applying a remote command, skip re-broadcasting
+				bool _isLocalAction = !Multiplayer.CommandDispatcher.IsApplyingRemote;
+				if (_isLocalAction && Multiplayer.NetworkSession.Instance != null && Multiplayer.NetworkSession.Instance.IsInSession)
+				{
+					// TODO: hook networking here — broadcast AddWire command for WireToPlace
+				}
 			}
 		}
 

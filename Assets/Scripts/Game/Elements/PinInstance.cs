@@ -8,6 +8,8 @@ namespace DLS.Game
 {
 	public class PinInstance : IInteractable
 	{
+		[HideInInspector] public System.Guid NetworkId = System.Guid.Empty;
+
 		public readonly PinAddress Address;
 
 		public readonly PinBitCount bitCount;

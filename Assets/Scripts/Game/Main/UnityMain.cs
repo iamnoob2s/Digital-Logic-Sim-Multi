@@ -71,6 +71,13 @@ namespace DLS.Game
 
 			Main.Init(audioState);
 
+			// Initialize multiplayer systems
+			var multiGO = new GameObject("MultiplayerSystems");
+			multiGO.AddComponent<DLS.Multiplayer.NetworkManager>();
+			multiGO.AddComponent<DLS.Multiplayer.CommandDispatcher>();
+			multiGO.AddComponent<DLS.Multiplayer.SnapshotManager>();
+			multiGO.AddComponent<DLS.Multiplayer.StableIdRegistry>();
+			DontDestroyOnLoad(multiGO);
 
 			if (openInMainMenu || !Application.isEditor) Main.LoadMainMenu();
 			else Main.CreateOrLoadProject(testProjectName, openA ? chipToOpenA : chipToOpenB);
