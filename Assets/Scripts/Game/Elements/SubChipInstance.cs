@@ -13,6 +13,8 @@ namespace DLS.Game
 {
 	public class SubChipInstance : IMoveable
 	{
+		[HideInInspector] public System.Guid NetworkId = System.Guid.Empty;
+
 		public readonly PinInstance[] AllPins;
 		public readonly ChipType ChipType;
 		public readonly ChipDescription Description;

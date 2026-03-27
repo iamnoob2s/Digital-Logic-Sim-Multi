@@ -8,6 +8,8 @@ namespace DLS.Game
 {
 	public class WireInstance : IInteractable
 	{
+		[HideInInspector] public System.Guid NetworkId = System.Guid.Empty;
+
 		public readonly PinBitCount bitCount;
 
 		// Wire points for multi-bit wires. Note: must be populated with points when drawing
